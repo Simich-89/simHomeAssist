@@ -1,0 +1,4 @@
+model/
+temp_res.mp3
+__pycache__/
+.env
