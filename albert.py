@@ -13,7 +13,11 @@ from gtts import gTTS
 from playsound import playsound
 
 # --- НАЛАШТУВАННЯ ---
-GEMINI_API_KEY = "AIzaSyB2vA68loWyKAAflggAez1uKS-BjsieZgg" 
+try:
+    from config import GEMINI_API_KEY
+except ImportError:
+    print("Помилка: Файл config.py не знайдено!")
+    GEMINI_API_KEY = ""
 genai.configure(api_key=GEMINI_API_KEY.strip())
 gemini_model = genai.GenerativeModel('gemini-2.5-flash')
 
