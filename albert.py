@@ -5,6 +5,7 @@ import queue
 import threading
 import cv2
 import sounddevice as sd
+import pyautogui
 from flask import Flask, Response, render_template_string
 from flask_socketio import SocketIO
 from vosk import Model, KaldiRecognizer
@@ -33,6 +34,7 @@ if not os.path.exists("model"):
 vosk_model = Model("model")
 samplerate = 16000 
 rec = KaldiRecognizer(vosk_model, samplerate)
+#rec.SetWords(True)
 audio_queue = queue.Queue()
 
 is_waiting_for_question = False
@@ -68,7 +70,7 @@ def shutdown_albert():
 
 def ask_gemini(question):
     try:
-        prompt = f"Відповідай дуже коротко (до 15 слів) українською мовою: {question}"
+        prompt = f"Коротко: {question}"
         response = gemini_model.generate_content(prompt)
         return response.text
     except Exception as e:
@@ -76,9 +78,28 @@ def ask_gemini(question):
 
 def audio_callback(indata, frames, time, status):
     audio_queue.put(bytes(indata))
+    
+def press_key(command_text):
+    """Логіка натискання клавіш"""
+    if "вліво" in command_text:
+        pyautogui.press('left')
+    elif "вправо" in command_text:
+        pyautogui.press('right')
+    elif "пробіл" in command_text:
+        pyautogui.press('space')
+    elif "альт таб" in command_text or "alt tab" in command_text:
+        pyautogui.hotkey('alt', 'tab')
+    elif "альт ентер" in command_text or "alt enter" in command_text:
+        pyautogui.hotkey('alt', 'enter')
+    else:
+        return False
+    return True
 
 def albert_logic():
     global is_waiting_for_question
+    global is_waiting_for_button
+    is_waiting_for_question = False
+    is_waiting_for_button = False
     
     with sd.RawInputStream(samplerate=samplerate, blocksize=4000, device=None,
                             dtype='int16', channels=1, callback=audio_callback):
@@ -91,6 +112,10 @@ def albert_logic():
             partial = json.loads(rec.PartialResult())
             p_text = partial.get('partial', '').lower()
             
+            if p_text: 
+                socketio.emit('noice', {'msg': p_text})
+                print(f"is_waiting_for_button {is_waiting_for_button} is_waiting_for_question {is_waiting_for_question}")
+            
             if "альберт стоп" in p_text:
                 print(">>> Зупинка звуку")
                 # playsound важко зупинити, але ми скидаємо розпізнавач
@@ -99,27 +124,45 @@ def albert_logic():
             
             # КОМАНДА НА ВИМКНЕННЯ
             if "альберт спать" in p_text:
+                socketio.emit('status', {'msg': 'Лягаю спати...'})
                 shutdown_albert()
+               
+            if "альберт відміна" in p_text:
+                is_waiting_for_question = False
+                is_waiting_for_button = False
+                socketio.emit('status', {'msg': 'Слухаю вас...'})
 
             if rec.AcceptWaveform(data):
                 result = json.loads(rec.Result())
                 text = result.get('text', '').lower()
                 
-                if not is_waiting_for_question:
+                # 1. Очікування активації
+                if not is_waiting_for_question and not is_waiting_for_button:
                     if "альберт питання" in text:
                         play_audio("notify.mp3")
                         is_waiting_for_question = True
-                        socketio.emit('status', {'msg': 'Слухаю вас...'})
+                        socketio.emit('status', {'msg': 'Слухаю питання...'})
+                    elif "альберт кнопка" in text:
+                        play_audio("notify.mp3")
+                        is_waiting_for_button = True
+                        socketio.emit('status', {'msg': 'Очікую кнопку...'})
                         rec.Reset()
-                else:
+
+                # 2. Режим НАТИСКАННЯ КНОПОК
+                elif is_waiting_for_button:
+                    if press_key(text):
+                        print(f">>> Натиснуто: {text}")
+                        socketio.emit('status', {'msg': f'Натиснуто: {text}'})
+                        #is_waiting_for_button = False
+                    rec.Reset()
+
+                # 3. Режим ЗАПИТАННЯ ДО AI
+                elif is_waiting_for_question:
                     if len(text.strip()) > 2:
-                        socketio.emit('status', {'msg': 'Обробка...'})
                         answer = ask_gemini(text)
                         socketio.emit('chat_answer', {'answer': answer})
                         speak_ukrainian(answer)
-                        
                         is_waiting_for_question = False
-                        socketio.emit('status', {'msg': 'Чекаю на "Альберт питання"'})
                         rec.Reset()
 
 # --- ВЕБ-ЧАСТИНА ---
@@ -141,17 +184,20 @@ def index():
             <style>
                 body { background: #121212; color: white; font-family: sans-serif; text-align: center; }
                 #status { font-size: 22px; color: #00ff00; margin: 15px; }
+                #noice { color: #888; font-style: italic; font-size: 0.9em; margin-top: 5px; }
                 .video-box { border: 2px solid #444; display: inline-block; }
             </style>
         </head>
         <body>
             <h1>Albert System</h1>
             <div id="status">Запуск...</div>
+            <div id="noice">шум...</div>
             <div class="video-box"><img src="/video_feed" width="640"></div>
             <div id="answer" style="margin-top:20px; padding:10px; background:#1e1e1e;"></div>
             <script>
                 var socket = io();
                 socket.on('status', function(data) { document.getElementById('status').innerText = data.msg; });
+                socket.on('noice', function(data) { document.getElementById('noice').innerText = data.msg; });
                 socket.on('chat_answer', function(data) { document.getElementById('answer').innerText = data.answer; });
             </script>
         </body>
