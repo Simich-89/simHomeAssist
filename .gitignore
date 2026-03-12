@@ -1,4 +1,4 @@
-conf
+config.py
 model/
 temp_res.mp3
 __pycache__/
